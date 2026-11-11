@@ -1,0 +1,13 @@
+[project]
+name = "ai-sales-sdr"
+version = "1.0.0"
+description = "Multi-agent cold email outreach with an autonomous SDR that answers prospect replies, built on the OpenAI Agents SDK."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "openai-agents>=0.15",
+    "gradio>=6.0",
+    "pydantic>=2",
+    "python-dotenv",
+    "requests",
+]
