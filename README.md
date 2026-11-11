@@ -169,6 +169,93 @@ For Gmail, enable 2-step verification and create an [app password](https://myacc
 
 ---
 
+## Deployment
+
+The app ships as a single container. When a host sets `PORT`, it listens on `0.0.0.0:$PORT` (the image defaults to `7860`).
+
+> **Always protect a hosted copy with a login.** Set `APP_USERNAME` and `APP_PASSWORD`, or anyone with the URL can send email from your account and spend your LLM credits. The app prints a warning at startup when it is hosted without them.
+
+| Variable | Purpose |
+|---|---|
+| `APP_USERNAME`, `APP_PASSWORD` | Login screen in front of the whole app |
+| `PORT` | Port to listen on (set automatically by most platforms) |
+| everything in `.env.example` | LLM provider, Resend and inbox settings |
+
+### Where to host it
+
+| Platform | Best for | Notes |
+|---|---|---|
+| **AWS EC2 / Lightsail** | Recommended: no request time limits, full control | Waiting for an inbox reply can take minutes |
+| **Railway / Fly.io / Render** | Simple managed containers | Use the `Dockerfile`; prefer Resend over SMTP (some hosts block SMTP ports) |
+| **Hugging Face Spaces** | Quick demos | Make the Space **private** or set the login variables |
+| **AWS App Runner / Google Cloud Run** | Serverless containers | Fine for generating emails; long "check my inbox" waits can exceed request time limits |
+
+### Run with Docker (any server)
+
+```bash
+docker build -t ai-sales-sdr .
+docker run -d --name sdr -p 7860:7860 --env-file .env \
+  -e APP_USERNAME=admin -e APP_PASSWORD='choose-a-strong-password' ai-sales-sdr
+# open http://localhost:7860 and sign in
+```
+
+### AWS: EC2 or Lightsail (recommended)
+
+On an Ubuntu instance (2 GB RAM is enough) with ports 80 and 443 open:
+
+```bash
+sudo apt-get update && sudo apt-get install -y docker.io git caddy
+git clone https://github.com/<your-username>/ai-sales-sdr.git && cd ai-sales-sdr
+nano .env                                   # provider key, Resend, inbox, APP_USERNAME, APP_PASSWORD
+sudo docker build -t ai-sales-sdr .
+sudo docker run -d --restart unless-stopped --name sdr \
+  -p 127.0.0.1:7860:7860 --env-file .env ai-sales-sdr
+
+# Free HTTPS for your domain (point an A record at the instance first)
+echo 'sdr.yourdomain.com {
+  reverse_proxy 127.0.0.1:7860
+}' | sudo tee /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
+
+AWS restricts outbound mail on port 25, but this app sends through Resend's HTTPS API, or SMTP on port 587, so it is not affected.
+
+### AWS: App Runner (managed)
+
+1. Build for `linux/amd64` and push to Amazon ECR:
+
+   ```bash
+   AWS_REGION=us-east-1
+   ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+   REPO=$ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/ai-sales-sdr
+
+   aws ecr create-repository --repository-name ai-sales-sdr --region $AWS_REGION
+   aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com
+   docker buildx build --platform linux/amd64 -t $REPO:latest --push .
+   ```
+
+2. Open **App Runner → Create service → Amazon ECR**, set the port to **7860**, and add your environment variables, including `APP_USERNAME` and `APP_PASSWORD`. Store keys in **AWS Secrets Manager**.
+3. Deploy and open the HTTPS URL App Runner gives you.
+
+Email generation fits comfortably within App Runner's request limits. For long inbox waits, use the EC2 option or the **Simulate the prospect** / **Type the prospect's reply** modes.
+
+### Hugging Face Spaces
+
+1. Create a **private** Space with **SDK: Docker**.
+2. Push this repository. The Space's `README.md` must start with:
+
+   ```yaml
+   ---
+   title: AI Sales SDR
+   sdk: docker
+   app_port: 7860
+   ---
+   ```
+
+3. Add your keys and `APP_USERNAME` / `APP_PASSWORD` under **Settings → Variables and secrets**.
+
+---
+
 ## Tech stack
 
 **OpenAI Agents SDK** (agents, tools, handoffs, structured outputs, tracing) · **OpenRouter / xAI / Gemini / Ollama** · **Gradio 6** · **Resend** · **IMAP/SMTP** · **Pydantic** · **asyncio**

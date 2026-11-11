@@ -747,7 +747,25 @@ def launch_ui():
         )
         sdr_go.click(sdr_turn, [reply_source, manual_reply, wait_minutes, send_for_real, chat], [chat, manual_reply])
 
-    demo.launch(inbrowser=True)
+    demo.launch(**_server_options())
+
+
+def _server_options() -> dict:
+    """Local: open the browser on 127.0.0.1. Hosted (PORT set by the platform): listen on 0.0.0.0.
+    Set APP_USERNAME / APP_PASSWORD to require a login - strongly recommended when hosted,
+    otherwise anyone with the URL can send email from your account."""
+    opts: dict = {}
+    port = os.getenv("PORT")
+    if port:
+        opts.update(server_name="0.0.0.0", server_port=int(port))
+    else:
+        opts["inbrowser"] = True
+    user, password = os.getenv("APP_USERNAME"), os.getenv("APP_PASSWORD")
+    if user and password:
+        opts["auth"] = (user, password)
+    elif port:
+        print("⚠️  Hosted without APP_USERNAME/APP_PASSWORD: anyone with the URL can use this app.")
+    return opts
 
 
 def main():

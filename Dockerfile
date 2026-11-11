@@ -1,0 +1,16 @@
+FROM python:3.12-slim
+COPY --from=ghcr.io/astral-sh/uv:0.13.6 /uv /bin/uv
+
+WORKDIR /app
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    PYTHONUNBUFFERED=1 \
+    PORT=7860
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+COPY . .
+
+EXPOSE 7860
+# Set APP_USERNAME / APP_PASSWORD at runtime to protect the app with a login
+CMD ["uv", "run", "--frozen", "app.py"]
