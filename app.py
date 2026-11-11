@@ -41,11 +41,67 @@ import requests
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
-from agents import Agent, ModelSettings, Runner, function_tool, trace
+from agents import (
+    Agent,
+    ModelSettings,
+    OpenAIChatCompletionsModel,
+    Runner,
+    function_tool,
+    set_default_openai_api,
+    set_default_openai_client,
+    set_tracing_disabled,
+    trace,
+)
+from openai import AsyncOpenAI
 
 load_dotenv(override=True)
 
-MODEL_NAME = "gpt-5.4-mini"
+# ---------------------------------------------------------------------------
+# LLM provider: OpenAI, OpenRouter (incl. Claude, Gemini, Llama...), Grok, Gemini, Ollama
+# ---------------------------------------------------------------------------
+# name: (base_url, key env vars, default model)
+PROVIDERS = {
+    "openai": (None, ("OPENAI_API_KEY",), "gpt-5.4-mini"),
+    "openrouter": ("https://openrouter.ai/api/v1", ("OPENROUTER_API_KEY",), "openai/gpt-5.4-mini"),
+    "grok": ("https://api.x.ai/v1", ("XAI_API_KEY", "GROK_API_KEY"), "grok-4.7"),
+    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai/", ("GEMINI_API_KEY", "GOOGLE_API_KEY"), "gemini-2.5-flash"),
+    "ollama": (os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"), (), "llama3.2"),
+}
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").lower()
+if LLM_PROVIDER not in PROVIDERS:
+    raise SystemExit(f"Unknown LLM_PROVIDER '{LLM_PROVIDER}'. Choose one of: {', '.join(PROVIDERS)}")
+_base_url, _key_envs, _default_model = PROVIDERS[LLM_PROVIDER]
+MODEL_NAME = os.getenv("LLM_MODEL") or _default_model
+
+if LLM_PROVIDER != "openai":
+    _api_key = next((os.getenv(k) for k in _key_envs if os.getenv(k)), None) or ("ollama" if not _key_envs else None)
+    if not _api_key:
+        raise SystemExit(f"LLM_PROVIDER={LLM_PROVIDER} needs one of: {', '.join(_key_envs)}")
+    _client = AsyncOpenAI(base_url=_base_url, api_key=_api_key)
+    set_default_openai_client(_client, use_for_tracing=False)
+    set_default_openai_api("chat_completions")  # other providers speak Chat Completions, not Responses
+    # Wrap the model so ids like "anthropic/claude-..." go to the provider as-is
+    MODEL = OpenAIChatCompletionsModel(model=MODEL_NAME, openai_client=_client)
+else:
+    MODEL = MODEL_NAME
+    if not os.getenv("OPENAI_API_KEY"):
+        set_tracing_disabled(True)  # traces are uploaded to OpenAI; skip when there is no OpenAI key
+
+
+def llm_settings(**kwargs) -> ModelSettings:
+    """Per-agent model settings that work on every provider."""
+    if LLM_PROVIDER != "openai":
+        # OpenRouter & co. reserve the model's whole output window when max_tokens is unset
+        kwargs.setdefault("max_tokens", int(os.getenv("LLM_MAX_TOKENS", "4096")))
+        # Claude Opus 5.5 / Sonnet 5.5 / Fable reject forced tool choice; the instructions already demand the tools
+        if kwargs.get("tool_choice") == "required" and any(
+            tag in MODEL_NAME.lower() for tag in ("opus-5.5", "opus-5-5", "sonnet-5.5", "sonnet-5-5", "fable", "mythos")
+        ):
+            kwargs.pop("tool_choice")
+    return ModelSettings(**kwargs)
+
+
+print(f"🤖 Using {LLM_PROVIDER}:{MODEL_NAME}")
 
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 RESEND_FROM = os.getenv("RESEND_FROM", "ComplAI <onboarding@resend.dev>")
@@ -219,16 +275,16 @@ Never use placeholders like [First Name], [Company Name] or [Your Name] - the em
 Greet with "Hi there," and sign off as "Alex, ComplAI".
 """
 
-sales_agent1 = Agent(name="Professional Sales Agent", model=MODEL_NAME,
+sales_agent1 = Agent(name="Professional Sales Agent", model=MODEL, model_settings=llm_settings(),
                      instructions=intro + "Your email style is professional, serious, with gravitas and credibility.")
-sales_agent2 = Agent(name="Humorous Sales Agent", model=MODEL_NAME,
+sales_agent2 = Agent(name="Humorous Sales Agent", model=MODEL, model_settings=llm_settings(),
                      instructions=intro + "Your email style is witty, engaging, and humorous.")
-sales_agent3 = Agent(name="Executive Sales Agent", model=MODEL_NAME,
+sales_agent3 = Agent(name="Executive Sales Agent", model=MODEL, model_settings=llm_settings(),
                      instructions=intro + "Your email style is concise, to the point, in the style of a busy senior executive.")
 
 sales_picker = Agent(
     name="Sales Picker",
-    model=MODEL_NAME,
+    model=MODEL, model_settings=llm_settings(),
     instructions="""
 You pick the best cold sales email from the given options.
 Imagine you are a customer and pick the one you are most likely to respond to.
@@ -245,7 +301,7 @@ class EmailFeedback(BaseModel):
 
 email_critic = Agent(
     name="Email Critic",
-    model=MODEL_NAME,
+    model=MODEL, model_settings=llm_settings(),
     output_type=EmailFeedback,
     instructions="""
 You are a demanding head of sales reviewing a cold email before it goes out.
@@ -258,7 +314,7 @@ Only approve if the score is 8 or higher.
 
 email_refiner = Agent(
     name="Email Refiner",
-    model=MODEL_NAME,
+    model=MODEL, model_settings=llm_settings(),
     instructions=intro + """
 You are given a draft cold email and feedback on it.
 Rewrite the email applying the feedback. Keep what already works.
@@ -266,22 +322,22 @@ Reply with the improved email only (subject line first).
 """,
 )
 
-subject_writer = Agent(name="Subject Writer", model=MODEL_NAME,
+subject_writer = Agent(name="Subject Writer", model=MODEL, model_settings=llm_settings(),
                        instructions="Write a subject line for a cold sales email that is likely to get a response. "
                                     "Never use placeholders in square brackets like [goal] or [Company]. Reply with the subject only.")
-html_converter = Agent(name="HTML Converter", model=MODEL_NAME,
+html_converter = Agent(name="HTML Converter", model=MODEL, model_settings=llm_settings(),
                        instructions="Convert a text email body to a simple, clean, well-laid-out HTML email body. Reply with the HTML only.")
 
 email_manager = Agent(
     name="Email Manager",
-    model=MODEL_NAME,
+    model=MODEL,
     tools=[
         subject_writer.as_tool(tool_name="subject_writer", tool_description="Write a subject for a cold sales email"),
         html_converter.as_tool(tool_name="html_converter", tool_description="Convert a text email body to an HTML email body"),
         send_email_tool,
     ],
     handoff_description="Format the chosen email to HTML and send it",
-    model_settings=ModelSettings(tool_choice="required"),
+    model_settings=llm_settings(tool_choice="required"),
     instructions="""
 You receive the body of an email to be sent.
 First use subject_writer to write a subject, then html_converter to make the HTML body.
@@ -298,7 +354,7 @@ class SDRReply(BaseModel):
 
 sdr_agent = Agent(
     name="SDR Agent",
-    model=MODEL_NAME,
+    model=MODEL, model_settings=llm_settings(),
     output_type=SDRReply,
     instructions=intro + """
 You are now an SDR (Sales Development Representative) in a live email conversation with a prospect.
@@ -313,7 +369,7 @@ If the prospect asks to stop, reply politely and set end_conversation to true.
 
 prospect_simulator = Agent(
     name="Prospect Simulator",
-    model=MODEL_NAME,
+    model=MODEL, model_settings=llm_settings(),
     instructions="""
 You are Sam, CTO of a 40-person fintech startup that needs SOC2 for an enterprise deal in 6 months.
 You are busy and a bit sceptical about AI tools. Reply to the latest sales email in the thread
@@ -368,10 +424,10 @@ async def llm_orchestration():
 
     sales_manager = Agent(
         name="Sales Manager",
-        model=MODEL_NAME,
+        model=MODEL,
         tools=tools,
         handoffs=[email_manager],
-        model_settings=ModelSettings(tool_choice="required"),
+        model_settings=llm_settings(tool_choice="required"),
         instructions=f"""
 You are a Sales Manager at ComplAI. Your goal is to send out the single best cold sales email.
 
@@ -527,9 +583,9 @@ async def ui_via_llm(objective: str):
     """One manager LLM plans and calls everything as tools - no handoff."""
     manager = Agent(
         name="Sales Manager",
-        model=MODEL_NAME,
+        model=MODEL,
         tools=_writer_tools() + _review_tools() + list(email_manager.tools),
-        model_settings=ModelSettings(tool_choice="required"),
+        model_settings=llm_settings(tool_choice="required"),
         instructions=f"""
 You are a Sales Manager at ComplAI. Your goal is to send out the single best cold sales email for the objective.
 
@@ -549,7 +605,7 @@ async def ui_via_handoff(objective: str):
     """Manager LLM drafts with tools, then hands control to the Email Manager."""
     manager = Agent(
         name="Sales Manager",
-        model=MODEL_NAME,
+        model=MODEL, model_settings=llm_settings(),
         tools=_writer_tools() + _review_tools(),
         handoffs=[email_manager],
         instructions=f"""

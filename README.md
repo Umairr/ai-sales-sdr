@@ -8,14 +8,28 @@ The demo company is **ComplAI**, a fictional SaaS product for SOC 2 compliance. 
 
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![OpenAI Agents SDK](https://img.shields.io/badge/OpenAI-Agents%20SDK-412991)
+![LLM](https://img.shields.io/badge/LLM-OpenAI%20%7C%20Claude%20%7C%20OpenRouter%20%7C%20Grok%20%7C%20Gemini%20%7C%20Ollama-6b4fbb)
 ![Gradio](https://img.shields.io/badge/Gradio-6-ff7c00)
 ![Resend](https://img.shields.io/badge/email-Resend-black)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ---
 
+## Screenshots
+
+**Start screen.** Pick an objective, choose how the agents are orchestrated, and decide whether to really send.
+
+![AI Sales SDR start screen](docs/screenshots/home.png)
+
+**After a run.** The agent activity panel streams every step and ends with the best email. Below it are the SDR conversation controls and a live HTML preview of the email exactly as the prospect will see it. This run was a dry run, so nothing was sent.
+
+![AI Sales SDR after generating an email](docs/screenshots/run.png)
+
+---
+
 ## Features
 
+- **Bring your own LLM.** Run every agent on OpenAI, Claude, Grok, Gemini, Llama and more through OpenRouter, xAI, Gemini or a local Ollama model.
 - **Competing writers.** Professional, humorous and executive-style sales agents draft emails in parallel.
 - **Best-of-N selection.** A picker agent chooses the strongest draft.
 - **Critic–refiner loop.** A critic scores the email with structured feedback, and a refiner rewrites it until it is approved or the round limit is reached.
@@ -72,7 +86,7 @@ flowchart LR
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
-- An OpenAI API key
+- An API key for any supported LLM provider (or a local Ollama install)
 - A [Resend](https://resend.com) API key and/or an email account with an app password (for SMTP/IMAP)
 
 ### Installation
@@ -103,11 +117,44 @@ In the web app:
 
 ---
 
+## Choose your LLM provider
+
+Set `LLM_PROVIDER` in `.env` and add that provider's key. All agents switch together.
+
+| Provider | `LLM_PROVIDER` | Key | Default model |
+|---|---|---|---|
+| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-5.4-mini` |
+| OpenRouter (Claude, GPT, Grok, Llama, Mistral…) | `openrouter` | `OPENROUTER_API_KEY` | `openai/gpt-5.4-mini` |
+| xAI Grok | `grok` | `XAI_API_KEY` | `grok-4.7` |
+| Google Gemini | `gemini` | `GEMINI_API_KEY` | `gemini-2.5-flash` |
+| Ollama (local) | `ollama` | none | `llama3.2` |
+
+**Using Claude.** The OpenAI Agents SDK talks to OpenAI-style APIs, so Claude runs through OpenRouter:
+
+```bash
+LLM_PROVIDER=openrouter
+OPENROUTER_API_KEY=sk-or-...
+LLM_MODEL=anthropic/claude-haiku-5.5     # or anthropic/claude-sonnet-5.5, anthropic/claude-opus-5.5
+```
+
+**Using Grok.**
+
+```bash
+LLM_PROVIDER=grok
+XAI_API_KEY=xai-...
+```
+
+For providers other than OpenAI, the app switches the Agents SDK to the Chat Completions API and caps output tokens (`LLM_MAX_TOKENS`, default 4096). It also turns off tracing when there is no OpenAI key, because traces are uploaded to the OpenAI dashboard. Models that don't support forced tool calls (Claude Opus 5.5, Sonnet 5.5) are handled automatically.
+
+---
+
 ## Configuration
 
 | Variable | Required | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | ✅ | OpenAI API key |
+| `LLM_PROVIDER` | | `openai` (default), `openrouter`, `grok`, `gemini`, `ollama` |
+| `LLM_MODEL` | | Override the provider's default model |
+| Provider key | ✅ | `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `XAI_API_KEY` or `GEMINI_API_KEY` |
 | `RESEND_API_KEY` | | Resend API key; if empty, SMTP is used |
 | `RESEND_FROM` | | Sender, e.g. `ComplAI <onboarding@resend.dev>` |
 | `PROSPECT_EMAIL` | | Recipient of the cold email |
@@ -124,7 +171,7 @@ For Gmail, enable 2-step verification and create an [app password](https://myacc
 
 ## Tech stack
 
-**OpenAI Agents SDK** (agents, tools, handoffs, structured outputs, tracing) · **Gradio 6** · **Resend** · **IMAP/SMTP** · **Pydantic** · **asyncio**
+**OpenAI Agents SDK** (agents, tools, handoffs, structured outputs, tracing) · **OpenRouter / xAI / Gemini / Ollama** · **Gradio 6** · **Resend** · **IMAP/SMTP** · **Pydantic** · **asyncio**
 
 ---
 
